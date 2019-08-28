@@ -77,8 +77,9 @@ private:
   bool vertexSelection(const reco::Vertex& vertex) const;
   
   // ----------member data ---------------------------
-  edm::InputTag trackLabel;
-  edm::InputTag vertexLabel;
+  edm::EDGetTokenT<reco::VertexCollection> thePVToken_;
+  edm::EDGetTokenT<reco::TrackCollection>  theTracksToken_;
+  edm::EDGetTokenT<reco::BeamSpot> theBeamspotToken_;
 
   // --- track selection variables
   double tkMinPt;
@@ -108,9 +109,15 @@ private:
 // constructors and destructor
 //
 Residuals::Residuals(const edm::ParameterSet& pset){
-  //about configuration
-  trackLabel  = pset.getParameter<edm::InputTag>("TrackLabel");    
-  vertexLabel = pset.getParameter<edm::InputTag>("VertexLabel");    
+
+  edm::InputTag TrackCollectionTag_ = pset.getParameter<edm::InputTag>("TrackLabel");
+  theTracksToken_= consumes<reco::TrackCollection>(TrackCollectionTag_);
+
+  edm::InputTag VertexCollectionTag_ = pset.getParameter<edm::InputTag>("VertexLabel");
+  thePVToken_ = consumes<reco::VertexCollection>(VertexCollectionTag_);
+
+  edm::InputTag BeamspotTag_ = edm::InputTag("offlineBeamSpot");
+  theBeamspotToken_ = consumes<reco::BeamSpot>(BeamspotTag_);
 
   tkMinPt = pset.getParameter<double>("TkMinPt");    
   tkMinXLayers = pset.getParameter<int>("TkMinXLayers");
@@ -126,7 +133,6 @@ Residuals::Residuals(const edm::ParameterSet& pset){
   vtxErrorZMin     = pset.getParameter<double>("VtxErrorZMin");
   vtxErrorZMax     = pset.getParameter<double>("VtxErrorZMax");
     
-
    //now do what ever initialization is needed
   edm::Service<TFileService> fs;
   tree = fs->make<TTree>( "tree"  , "recoTrack IP residuals");
@@ -152,22 +158,34 @@ Residuals::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
    using namespace reco;
    using namespace std;
 
+   Handle<TrackCollection> tracks;
+   iEvent.getByToken(theTracksToken_,tracks);
+
+   //std::cout << "size of track collection: "<< tracks->size() << std::endl;
+
    Handle<VertexCollection> vtxH;
-   iEvent.getByLabel(vertexLabel, vtxH);
+   iEvent.getByToken(thePVToken_, vtxH);
+
+   if (!vtxH.isValid()) return;
+
+   //std::cout << "size of vtx collection: "<< vtxH->size() << std::endl;
 
    ESHandle<MagneticField> theMF;
    iSetup.get<IdealMagneticFieldRecord>().get(theMF);
 
-
    VertexReProducer revertex(vtxH, iEvent);
-   Handle<TrackCollection> pvtracks;   iEvent.getByLabel(revertex.inputTracks(),   pvtracks);
-   Handle<BeamSpot>        pvbeamspot; iEvent.getByLabel(revertex.inputBeamSpot(), pvbeamspot);
 
+   //Handle<TrackCollection> pvtracks;
+   //iEvent.getByLabel(revertex.inputTracks(),   pvtracks);
+   //Handle<BeamSpot>        pvbeamspot;
+   //iEvent.getByLabel(revertex.inputBeamSpot(), pvbeamspot);
 
-   Handle<TrackCollection> tracks;  iEvent.getByLabel(trackLabel, tracks);
-   if(tracks.id() != pvtracks.id())
-     cout << "WARNING: the tracks originally used for PV are not the same used in this analyzer." 
-	  << "Is this really what you want?" << endl;
+   Handle<BeamSpot>        pvbeamspot;
+   iEvent.getByToken(theBeamspotToken_, pvbeamspot);
+
+   //if(tracks.id() != pvtracks.id())
+   // cout << "WARNING: the tracks originally used for PV are not the same used in this analyzer."
+   //	  << "Is this really what you want?" << endl;
 
    //if (pvbeamspot.id() != theBeamSpot.id()) 
    //  edm::LogWarning("Inconsistency") << "The BeamSpot used for PV reco is not the same used in this analyzer.";
@@ -191,20 +209,20 @@ Residuals::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
      if(! trackSelection(*itk)) continue;
      // ---
      
-
      TrackCollection newTkCollection;
      newTkCollection.assign(tracks->begin(), itk);
      newTkCollection.insert(newTkCollection.end(),itk+1,tracks->end());
      //newTkCollection.insert(newTkCollection.end(),itk,tracks->end()); // only for debugging purpose
 
 
-     //cout << "before,after size: " << tkH->size() << " , " << newCollection.size() << endl;
+     //cout << "tracks before,after size: " << tracks->size() << " , " << newTkCollection.size() << endl;
   
-    
-
      // --- from Giovanni to refit the prim.vertex     
      vector<TransientVertex> pvs = revertex.makeVertices(newTkCollection, *pvbeamspot, iSetup) ;
+     //cout << "vertices before,after: " << vtxH->size() << " , " << pvs.size() << endl;
+
      if (pvs.empty()) continue;
+
      reco::Vertex newPV = reco::Vertex(pvs.front());
      Track::Point vtxPosition = Track::Point(newPV.position().x(),
 					     newPV.position().y(),
@@ -212,13 +230,10 @@ Residuals::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
      // ---          
      if(! vertexSelection(newPV) ) continue;
 
-
-
-
-
-     
      double d0 = itk->dxy(vtxPosition);
      double dz = itk->dz(vtxPosition);
+
+     //cout << "d0:" << d0 << " dz:" << dz << std::endl;
 
      //Filling the tree
      raw.pt  = itk->pt();
